@@ -24,7 +24,7 @@ func main() {
 	flag.Int64Var(&appID, "app_id", 0, "github app id")
 	flag.Int64Var(&installationID, "installation_id", 0, "github installation id")
 	flag.StringVar(&message, "message", "chore: Sync by .github", "commit message")
-	flag.StringVar(&files, "files", "", "config files, separated by commas")
+	flag.StringVar(&files, "files", "", "config files, separated by spaces")
 	flag.BoolVar(&dryRun, "dryRun", false, "dry run")
 	flag.Parse()
 	if appID == 0 || installationID == 0 || len(message) == 0 || len(files) == 0 {
