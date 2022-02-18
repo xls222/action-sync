@@ -1,6 +1,6 @@
 # action.yml
-name: "action-organization-manager"
-description: "manager organization repositories in one file"
+name: "action-sync"
+description: "sync file to organization all repositories"
 author: myml
 branding:
   icon: align-center
