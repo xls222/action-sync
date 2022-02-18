@@ -36,6 +36,6 @@ runs:
         go install github.com/myml/action-sync@main
     - name: command
       shell: bash
-      run: action-sync -app_id=${{ inputs.app_id }} -installation_id=${{ inputs.installation_id }} -files=${{ $inputs.files }} -message =${{ $inputs.message }}
+      run: action-sync -app_id=${{ inputs.app_id }} -installation_id=${{ inputs.installation_id }} -files=${{ inputs.files }} -message =${{ inputs.message }}
       env:
         PRIVATE_KEY: ${{ inputs.private_key }}
