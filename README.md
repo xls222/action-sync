@@ -1,29 +1,95 @@
-# GitHub Action 集成
+# GitHub Action 同步
 
 ## 说明
 
-这个仓库用于提供组织的 Github Action 模板，并且在模板变化后同步到其他仓库
+这个Action用于同步模板文件到组织的所有仓库中，支持拆分配置文件，以实现增量同步。
 
-## 目录结构
+## 输入
 
-```txt
-├── .github
-│   └── workflows
-│       ├── teams-check.yml 自动触发的Action，用于在发起的PR 或push 中, 配置文件或Action模板变动时，检查yaml 的合法性
-│       ├── teams-update.yml 自动触发的Action，用于在配置文件或Action模板变动时，自动修改Teams 成员
-│       ├── jenkins-bridge.yml 可重用的Action文件，在check.yml中引用
-│       └── sync.yml  自动触发的Action，用于在配置文件或Action模板变动时，自动同步到其他仓库中
-├── go.mod
-├── go.sum
-├── main.go
-├── README.md
-├── teams.yaml 配置Teams
-├── repos 同步配置，目录下文件发生变动，读取变动的配置，并触发该配置的变动
-│   └── peeweep-test
-│       └── test-action.json
-└── workflow-templates  Action模板，在GitHub添加Action时可选择，修改目录下文件，会触发所有配置同步
-    ├── check.properties.json
-    └── check.yml
+```yaml
+inputs:
+  app_id:
+    description: "github app id"
+    required: true
+  installation_id:
+    description: "github app installation id"
+    required: true
+  private_key:
+    description: "github app private key"
+    required: true
+  files:
+    description: "config files"
+    required: true
+  message:
+    description: "commit message"
+    required: false
+    default: "chore: Sync by .github"
+```
+
+## 例子
+
+```yaml
+name: Sync
+on:
+  push:
+    paths:
+      - ".github/workflows/sync.yml"
+      - "repos/**"
+      - "workflow-templates/**"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "dry run"
+        required: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      # 获取变动的配置文件
+      - name: Get changed configs
+        id: changed-configs
+        uses: tj-actions/changed-files@v16
+        with:
+          separator: " "
+          files: repos/**
+      # 根据变动的配置文件，增量同步
+      - name: Sync changed configs
+        uses: myml/action-sync@main
+        if: steps.changed-configs.outputs.any_changed == 'true'
+        with:
+          app_id: 164400
+          installation_id: 22221748
+          private_key: ${{ secrets.APP_PRIVATE_KEY }}
+          files: "${{ steps.changed-configs.outputs.all_changed_files }}"
+          message: "chore: Sync by peeweep-test/.github"
+      # 判断是否更改了模板文件或工作流配置
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v16
+        with:
+          files: |
+            workflow-templates/**
+            .github/workflows/sync.yml
+      # 如果更改了模板文件，则使用所有配置文件，全量同步
+      - name: Get all configs
+        id: all-configs
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: |
+          all_configs=`find repos -type f | xargs`
+          echo all configs $all_configs
+          echo "::set-output name=ALL_CONFIGS::$all_configs"
+      - name: Sync changed files
+        uses: myml/action-sync@main
+        if: steps.changed-files.outputs.any_changed == 'true'
+        with:
+          app_id: 164400
+          installation_id: 22221748
+          private_key: ${{ secrets.APP_PRIVATE_KEY }}
+          files: "${{ steps.all-configs.outputs.ALL_CONFIGS }}"
+          message: "chore: Sync by peeweep-test/.github"
 ```
 
 ## 同步配置
@@ -36,37 +102,13 @@
     "src": "workflow-templates/check.yml",
     "dest": "peeweep-test/test-action/.github/workflows/check.yml",
     // 可选项，默认同步文件到所有分支
-    "brache": ["main"]
+    "branches": ["main"]
   }
 ]
 ```
 
 以上配置将 workflow-templates/check.yml 同步到 peeweep-test/test-action 仓库的 .github/workflows 目录下。
 
-虽然配置可写在 repos 目录下任意位置，但为了便于维护，建议以仓库路径为文件名
+虽然配置可写在任意位置，但为了便于维护，建议以仓库路径为文件名
 
 例如同步到 peeweep-test/test-action 仓库的配置文件建议放置到 repos/peeweep-test/test-action.json
-
-## Teams 配置
-
-```
-teams:
-  admin: # team 名
-    members: # team 成员
-      - peeweep
-  dtkcore:
-    members:
-      - peeweep
-  reviewer:
-    members:
-      - myml
-      - peeweep
-```
-
-成员在team 中的权限默认为 member
-
-如果成员同时是组织的maintainer, 会自动升级为maintainer
-
-## TODO
-
-- [x] 同步流程手动触发会无权限同步文件
