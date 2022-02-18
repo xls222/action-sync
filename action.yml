@@ -1,0 +1,41 @@
+# action.yml
+name: "action-organization-manager"
+description: "manager organization repositories in one file"
+author: myml
+branding:
+  icon: align-center
+  color: "black"
+inputs:
+  app_id:
+    description: "github app id"
+    required: true
+  installation_id:
+    description: "github app installation id"
+    required: true
+  private_key:
+    description: "github app private key"
+    required: true
+  files:
+    description: "config files"
+    required: true
+  message:
+    description: "commit message"
+    required: false
+    default: "chore: Sync by .github"
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/setup-go@v2
+      with:
+        go-version: ^1.17.1
+    - name: install action binary
+      shell: bash
+      run: |
+        go env -w GO111MODULE=on
+        go install github.com/myml/action-sync@main
+    - name: command
+      shell: bash
+      run: action-sync -app_id=${{ inputs.app_id }} -installation_id=${{ inputs.installation_id }} -files=${{ $inputs.files }} -message =${{ $inputs.message }}
+      env:
+        PRIVATE_KEY: ${{ inputs.private_key }}
