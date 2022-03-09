@@ -33,6 +33,7 @@ runs:
       shell: bash
       run: |
         go env -w GO111MODULE=on
+        go env -w GOPROXY=direct
         go install github.com/linuxdeepin/action-sync@main
     - name: command
       shell: bash
