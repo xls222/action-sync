@@ -2,19 +2,17 @@ package main
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
-	"github.com/bradleyfalzon/ghinstallation"
 	"github.com/google/go-github/github"
 )
 
@@ -22,7 +20,6 @@ type Config struct {
 	Src      string   `json:"src"`
 	Dest     string   `json:"dest"`
 	Branches []string `json:"branches"`
-	Delete   bool     `json:"delete"`
 }
 type Branch struct {
 	Owner  string
@@ -31,32 +28,21 @@ type Branch struct {
 	Base   string
 }
 
-var tempBranchRegexp = regexp.MustCompile(`sync/t_\d+`)
-
 func main() {
-	privateKey := []byte(os.Getenv("PRIVATE_KEY"))
-	var appID, installationID int64
 	var files, message string
 	var dryRun bool
-	var autoMerge bool
-	flag.Int64Var(&appID, "app_id", 0, "github app id")
-	flag.Int64Var(&installationID, "installation_id", 0, "github installation id")
 	flag.StringVar(&message, "message", "chore: Sync by .github", "commit message")
 	flag.StringVar(&files, "files", "", "config files, separated by spaces")
 	flag.BoolVar(&dryRun, "dryRun", false, "dry run")
-	flag.BoolVar(&autoMerge, "autoMerge", true, "auto merge")
 	flag.Parse()
-	if appID == 0 || installationID == 0 || len(message) == 0 || len(files) == 0 {
-		flag.PrintDefaults()
-		return
-	}
 
-	itr, err := ghinstallation.New(http.DefaultTransport, appID, installationID, []byte(privateKey))
-	if err != nil {
-		panic(err)
+	if files == "" {
+		flag.PrintDefaults()
+		os.Exit(1)
 	}
-	client := github.NewClient(&http.Client{Transport: itr})
+	client := github.NewClient(&http.Client{})
 	ctx := context.Background()
+
 	// Sync all repositories if do not repos changed
 	for _, file := range strings.Fields(files) {
 		data, err := os.ReadFile(file)
@@ -70,8 +56,15 @@ func main() {
 		}
 		log.Println("Config", file)
 
-		mergeBranch := map[string]Branch{}
-		cleanupBranch := map[string]Branch{}
+		// 临时目录，用于存放git仓库
+		tmpDir, err := os.MkdirTemp("./", "tmp_")
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		// map[$repo][$branch]$changed
+		changedBranches := make(map[string]map[string]bool)
+
 		for _, config := range configs {
 			owner, repo, path, err := split(config.Dest)
 			if err != nil {
@@ -81,130 +74,97 @@ func main() {
 			if dryRun {
 				continue
 			}
-			// get all branch
-			var branches []*github.Branch
-			listBranchOpt := github.ListOptions{}
-			for {
-				bs, resp, err := client.Repositories.ListBranches(ctx, owner, repo, &listBranchOpt)
-				if err != nil {
-					log.Fatal(err)
-				}
-				branches = append(branches, bs...)
-				if resp.NextPage == 0 {
-					break
-				}
-				listBranchOpt.Page = resp.NextPage
-				time.Sleep(time.Second / 10)
-			}
 			var syncBranches []string
+			branches, _, err := client.Repositories.ListBranches(ctx, owner, repo, nil)
+			if err != nil {
+				log.Fatal(err)
+			}
 			// match branch
-			for i := range branches {
-				branchName := branches[i].GetName()
-				if tempBranchRegexp.MatchString(branchName) {
-					// clean temp branch
-					cleanupBranch[branchName] = Branch{Owner: owner, Repo: repo, Branch: branchName}
-					continue
-				}
-				if len(config.Branches) == 0 {
-					syncBranches = append(syncBranches, branchName)
-					continue
-				}
+			for i := range config.Branches {
+				reg := regexp.MustCompile(config.Branches[i])
 				match := false
-				for j := range config.Branches {
-					ok, err := regexp.MatchString(config.Branches[j], branchName)
-					if err != nil {
-						log.Printf("branch [%s] invalid: %s", config.Branches[j], err)
-					}
-					if ok {
+				for j := range branches {
+					if reg.Match([]byte(*branches[j].Name)) {
 						match = true
-						continue
+						break
 					}
 				}
 				if match {
-					syncBranches = append(syncBranches, branchName)
+					syncBranches = append(syncBranches, *branches[i].Name)
 				}
 			}
-			for i := range syncBranches {
-				time.Sleep(time.Second / 10)
-				key := fmt.Sprintf("%s/%s/%s", owner, repo, syncBranches[i])
-				var branch Branch
-				branch, ok := cleanupBranch[key]
-				// create temp branch
-				if !ok {
-					tempBranch := fmt.Sprintf("sync/t_%d/%s/tmp", time.Now().Unix(), syncBranches[i])
-					tempRef := fmt.Sprintf("refs/heads/%s", tempBranch)
-					ref, _, err := client.Git.GetRef(ctx, owner, repo, fmt.Sprintf("heads/%s", syncBranches[i]))
-					if err != nil {
-						log.Fatal(err)
-					}
-					ref.Ref = github.String(tempRef)
-					_, _, err = client.Git.CreateRef(ctx, owner, repo, ref)
-					if err != nil {
-						log.Fatal(err)
-					}
-					branch = Branch{Owner: owner, Repo: repo, Base: syncBranches[i], Branch: tempBranch}
-					cleanupBranch[key] = branch
+			// all branch
+			if len(config.Branches) == 0 {
+				for i := range branches {
+					syncBranches = append(syncBranches, *branches[i].Name)
 				}
-				// put file
-				var changed bool
-				if config.Delete {
-					changed, err = deleteFile(ctx, client, owner, repo, path, message, branch.Branch)
+			}
+
+			workdir := filepath.Join(tmpDir, owner, repo)
+			if changedBranches[workdir] == nil {
+				changedBranches[workdir] = make(map[string]bool)
+				_, err = execCommand(ctx, "./", "git", "clone", fmt.Sprintf("git@github.com:%s/%s.git", owner, repo), workdir)
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
+			for _, branch := range syncBranches {
+				_, err = execCommand(ctx, workdir, "git", "checkout", branch)
+				if err != nil {
+					log.Fatal(err)
+				}
+				_, err = execCommand(ctx, workdir, "mkdir", "-p", filepath.Dir(path))
+				_, err = execCommand(ctx, workdir, "cp", filepath.Join("../../../", config.Src), path)
+				if err != nil {
+					log.Fatal(err)
+				}
+				// 判断是否有文件变动
+				out, err := execCommand(ctx, workdir, "git", "status", "-s")
+				if err != nil {
+					log.Fatal(err)
+				}
+				if len(out) == 0 {
+					continue
+				}
+				_, err = execCommand(ctx, workdir, "git", "add", ":/")
+				if err != nil {
+					log.Fatal(err)
+				}
+				// 多个变动合并成一个提交
+				if changedBranches[workdir][branch] {
+					_, err = execCommand(ctx, workdir, "git", "commit", "--amend", "-a", "-m", `"`+message+`"`)
 					if err != nil {
 						log.Fatal(err)
 					}
 				} else {
-					changed, err = sendFile(ctx, client, config.Src, owner, repo, path, message, branch.Branch)
+					_, err = execCommand(ctx, workdir, "git", "commit", "-a", "-m", `"`+message+`"`)
 					if err != nil {
 						log.Fatal(err)
 					}
-				}
-				if changed {
-					log.Printf("\t\tBranch Sync: %s TempBranch: %s\n", branch.Base, branch.Branch)
-					mergeBranch[key] = branch
-				} else {
-					log.Printf("\t\tBranch No Change: %s TempBranch: %s\n", branch.Base, branch.Branch)
+					changedBranches[workdir][branch] = true
 				}
 			}
 		}
 
-		for _, branch := range mergeBranch {
-			time.Sleep(time.Second / 10)
-			pr, _, err := client.PullRequests.Create(ctx, branch.Owner, branch.Repo, &github.NewPullRequest{
-				Title:               github.String("File Sync from linuxdeepin/.github"),
-				Head:                github.String(branch2Ref(branch.Branch)),
-				Base:                github.String(branch2Ref(branch.Base)),
-				MaintainerCanModify: github.Bool(true),
-			})
-			if err != nil {
-				log.Println("create pull request: ", err)
-				continue
-			}
-			if autoMerge {
-				time.Sleep(time.Second / 10)
-				_, _, err = client.PullRequests.Merge(ctx,
-					branch.Owner, branch.Repo,
-					pr.GetNumber(), message,
-					&github.PullRequestOptions{SHA: pr.GetHead().GetSHA(), MergeMethod: "squash"},
-				)
+		// 提交所有变动的仓库分支
+		for workdir := range changedBranches {
+			for branch := range changedBranches[workdir] {
+				_, err = execCommand(ctx, workdir, "git", "push", "origin", branch)
 				if err != nil {
-					log.Println("merge pull request: %w", err)
-				}
-			}
-		}
-		if autoMerge {
-			for _, branch := range cleanupBranch {
-				time.Sleep(time.Second / 10)
-				_, err := client.Git.DeleteRef(ctx, branch.Owner, branch.Repo, branch2Ref(branch.Branch))
-				if err != nil {
-					log.Println("delete ref faild: ", err)
+					log.Fatal(err)
 				}
 			}
 		}
 	}
 }
 
-func branch2Ref(branch string) string {
-	return fmt.Sprintf("refs/heads/%s", branch)
+func execCommand(ctx context.Context, workdir string, command string, args ...string) ([]byte, error) {
+	log.Println("\t\texec", "at", workdir, strings.Join(append([]string{command}, args...), " "))
+	cmd := exec.Command(command, args...)
+	if len(workdir) > 0 {
+		cmd.Dir = workdir
+	}
+	return cmd.CombinedOutput()
 }
 
 func split(dest string) (owner, repo, path string, err error) {
@@ -213,67 +173,4 @@ func split(dest string) (owner, repo, path string, err error) {
 		return "", "", "", fmt.Errorf("wrong dist. example: owner/repo/file")
 	}
 	return arr[0], arr[1], arr[2], nil
-}
-
-func sendFile(ctx context.Context, client *github.Client, localFile string, owner, repo, path, message string, branch string) (_changed bool, _err error) {
-	fileContent, _, resp, err := client.Repositories.GetContents(
-		ctx, owner, repo, path,
-		&github.RepositoryContentGetOptions{Ref: branch},
-	)
-	if err != nil {
-		if resp.StatusCode != http.StatusNotFound {
-			return false, fmt.Errorf("get content: %w", err)
-		}
-	}
-	var latestSha string
-	if fileContent != nil {
-		latestSha = fileContent.GetSHA()
-	}
-	content, err := os.ReadFile(localFile)
-	if err != nil {
-		return false, fmt.Errorf("read file: %w", err)
-	}
-	sha := sha1.New()
-	sha.Write([]byte(fmt.Sprintf("blob %d", len(content))))
-	sha.Write([]byte{0})
-	sha.Write(content)
-	currentSha := hex.EncodeToString(sha.Sum(nil))
-	if string(latestSha) == currentSha {
-		return false, nil
-	}
-	_, _, err = client.Repositories.UpdateFile(
-		ctx, owner, repo, path,
-		&github.RepositoryContentFileOptions{
-			Message: &message,
-			Content: content,
-			SHA:     &latestSha,
-			Branch:  &branch,
-		},
-	)
-	if err != nil {
-		return false, fmt.Errorf("update file: %w", err)
-	}
-	return true, nil
-}
-
-func deleteFile(ctx context.Context, client *github.Client, owner, repo, path, message, branch string) (_changed bool, _err error) {
-	fileContent, _, resp, err := client.Repositories.GetContents(
-		ctx, owner, repo, path,
-		&github.RepositoryContentGetOptions{Ref: branch},
-	)
-	if err != nil {
-		if resp.StatusCode != http.StatusNotFound {
-			return false, fmt.Errorf("get content: %w", err)
-		}
-		return false, nil
-	}
-	_, _, err = client.Repositories.DeleteFile(ctx, owner, repo, path, &github.RepositoryContentFileOptions{
-		Message: &message,
-		SHA:     fileContent.SHA,
-		Branch:  &branch,
-	})
-	if err != nil {
-		return false, fmt.Errorf("delete file: %w", err)
-	}
-	return true, nil
 }

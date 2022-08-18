@@ -3,20 +3,12 @@
 ## 说明
 
 这个Action用于同步模板文件到组织的所有仓库中，支持拆分配置文件，以实现增量同步。
+需提前配置好git使用的ssh密钥，配置方法见例子
 
 ## 输入
 
 ```yaml
 inputs:
-  app_id:
-    description: "github app id"
-    required: true
-  installation_id:
-    description: "github app installation id"
-    required: true
-  private_key:
-    description: "github app private key"
-    required: true
   files:
     description: "config files"
     required: true
@@ -48,32 +40,44 @@ jobs:
       - uses: actions/checkout@v2
         with:
           fetch-depth: 0
-      # 获取变动的配置文件
+      # 判断是否更改了配置文件，根据变动的配置文件增量同步
       - name: Get changed configs
         id: changed-configs
         uses: tj-actions/changed-files@v16
         with:
           separator: " "
           files: repos/**
-      # 根据变动的配置文件，增量同步
-      - name: Sync changed configs
-        uses: linuxdeepin/action-sync@main
-        if: steps.changed-configs.outputs.any_changed == 'true'
-        with:
-          app_id: 164400
-          installation_id: 22221748
-          private_key: ${{ secrets.APP_PRIVATE_KEY }}
-          files: "${{ steps.changed-configs.outputs.all_changed_files }}"
-          message: "chore: Sync by peeweep-test/.github"
-      # 判断是否更改了模板文件或工作流配置
+      
+      # 判断是否更改了模板文件或工作流文件，如果更改了模板文件，则使用全量同步
       - name: Get changed files
         id: changed-files
         uses: tj-actions/changed-files@v16
+        if: steps.changed-configs.outputs.any_changed != 'true'
         with:
           files: |
             workflow-templates/**
             .github/workflows/sync.yml
-      # 如果更改了模板文件，则使用所有配置文件，全量同步
+
+    - name: Git config
+        env:
+          SSH_KEY: ${{secrets.SYNC_SSH_KEY}}
+          KNOWN_HOSTS: ${{secrets.SYNC_SSH_KNOWN_HOSTS}}
+        run: |
+          mkdir ~/.ssh
+          echo "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          echo "$SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          git config --global user.name sync-bot
+          git config --global user.email sync-bot@deepin.org
+      
+      // 增量同步
+      - name: Sync changed configs
+        uses: linuxdeepin/action-sync@main
+        if: steps.changed-configs.outputs.any_changed == 'true'
+        with:
+          files: "${{ steps.changed-configs.outputs.all_changed_files }}"
+          message: "chore: Sync by peeweep-test/.github"
+
       - name: Get all configs
         id: all-configs
         if: steps.changed-files.outputs.any_changed == 'true'
@@ -81,13 +85,11 @@ jobs:
           all_configs=`find repos -type f | xargs`
           echo all configs $all_configs
           echo "::set-output name=ALL_CONFIGS::$all_configs"
-      - name: Sync changed files
+      // 全量同步
+      - name: Sync all files
         uses: linuxdeepin/action-sync@main
         if: steps.changed-files.outputs.any_changed == 'true'
         with:
-          app_id: 164400
-          installation_id: 22221748
-          private_key: ${{ secrets.APP_PRIVATE_KEY }}
           files: "${{ steps.all-configs.outputs.ALL_CONFIGS }}"
           message: "chore: Sync by peeweep-test/.github"
 ```
