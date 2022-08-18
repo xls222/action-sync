@@ -84,9 +84,12 @@ func main() {
 				log.Fatal(err)
 			}
 			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-			lines = lines[1:]
 			for i := range lines {
-				branch := strings.TrimPrefix(strings.TrimSpace(lines[i]), "origin/")
+				line := strings.TrimSpace(lines[i])
+				if strings.HasPrefix(line, "origin/HEAD") {
+					continue
+				}
+				branch := strings.TrimPrefix(line, "origin/")
 				branches = append(branches, branch)
 			}
 			var syncBranches []string
