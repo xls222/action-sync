@@ -91,11 +91,11 @@ func main() {
 			}
 			var syncBranches []string
 			// match branch
-			for i := range config.Branches {
-				reg := regexp.MustCompile(config.Branches[i])
+			for i := range branches {
 				match := false
-				for j := range branches {
-					if reg.Match([]byte(branches[j])) {
+				for j := range config.Branches {
+					reg := regexp.MustCompile(config.Branches[j])
+					if reg.Match([]byte(branches[i])) {
 						match = true
 						break
 					}
