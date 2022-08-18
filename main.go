@@ -149,8 +149,9 @@ func main() {
 		// 提交所有变动的仓库分支
 		for workdir := range changedBranches {
 			for branch := range changedBranches[workdir] {
-				_, err = execCommand(ctx, workdir, "git", "push", "origin", branch)
+				out, err := execCommand(ctx, workdir, "git", "push", "origin", branch)
 				if err != nil {
+					log.Println(string(out))
 					log.Fatal(err)
 				}
 			}
