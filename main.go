@@ -97,7 +97,7 @@ func main() {
 			for i := range branches {
 				match := false
 				for j := range config.Branches {
-					reg := regexp.MustCompile(config.Branches[j])
+					reg := regexp.MustCompile("^" + config.Branches[j])
 					if reg.Match([]byte(branches[i])) {
 						match = true
 						break
