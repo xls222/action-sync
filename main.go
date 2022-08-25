@@ -115,9 +115,10 @@ func main() {
 			}
 
 			for _, branch := range syncBranches {
-				_, err = execCommand(ctx, workdir, "git", "checkout", branch)
+				out, err = execCommand(ctx, workdir, "git", "checkout", branch)
 				if err != nil {
-					log.Fatal(err)
+					logError("err: %v output: %s", err, string(out))
+					continue
 				}
 				_, err = execCommand(ctx, workdir, "mkdir", "-p", filepath.Dir(path))
 				_, err = execCommand(ctx, workdir, "cp", filepath.Join("../../../", config.Src), path)
@@ -157,16 +158,25 @@ func main() {
 			for branch := range changedBranches[workdir] {
 				out, err := execCommand(ctx, workdir, "git", "push", "origin", branch)
 				if err != nil {
-					log.Println(string(out))
-					log.Fatal(err)
+					logError("err: %v output: %s", err, string(out))
 				}
 			}
 		}
 	}
 }
 
+func logError(format string, args ...interface{}) {
+	msg := fmt.Sprintf(format, args...)
+	fmt.Printf("::error::%s\n", msg)
+}
+
+func logDebug(format string, args ...interface{}) {
+	msg := fmt.Sprintf(format, args...)
+	fmt.Printf("::debug::%s\n", msg)
+}
+
 func execCommand(ctx context.Context, workdir string, command string, args ...string) ([]byte, error) {
-	log.Println("\t\texec", "at", workdir, strings.Join(append([]string{command}, args...), " "))
+	logDebug("exec at %s, command: %s", workdir, strings.Join(append([]string{command}, args...), " "))
 	cmd := exec.Command(command, args...)
 	if len(workdir) > 0 {
 		cmd.Dir = workdir
