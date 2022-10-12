@@ -27,4 +27,6 @@ runs:
         go build
     - name: Sync
       shell: bash
-      run: $GITHUB_ACTION_PATH/action-sync -files="${{ inputs.files }}" -message="${{ inputs.message }}"
+      run: |
+        echo "${{ inputs.files }}" > files
+        $GITHUB_ACTION_PATH/action-sync -files="$(cat files)" -message="${{ inputs.message }}"
