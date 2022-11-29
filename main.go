@@ -200,8 +200,9 @@ func execCommand(ctx context.Context, workdir string, command string, args ...st
 	data, err := cmd.CombinedOutput()
 	if err != nil {
 		logDebug("command: %s, error: %s", strings.Join(append([]string{command}, args...), " "), data)
+		return nil, fmt.Errorf("%w: %s", err, string(data))
 	}
-	return data, fmt.Errorf("%w: %s", err, string(data))
+	return data, nil
 }
 
 func split(dest string) (owner, repo, path string, err error) {
