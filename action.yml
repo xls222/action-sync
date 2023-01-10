@@ -9,6 +9,10 @@ inputs:
   files:
     description: "config files"
     required: true
+  files-from:
+    description: "read config list from file"
+    required: false
+    default: ".file_does_not_exist_336fcd84573cf94d21ec"
   message:
     description: "commit message"
     required: false
@@ -28,4 +32,4 @@ runs:
     - name: Sync
       shell: bash
       run: |
-        echo "${{ inputs.files }}" | xargs -d ' ' -i sh -c '$GITHUB_ACTION_PATH/action-sync -files="{}" -message="${{ inputs.message }}" || exit 255'
+        (cat "${{ files-from }}" || echo "${{ inputs.files }}") | xargs -d ' ' -i sh -c '$GITHUB_ACTION_PATH/action-sync -files="{}" -message="${{ inputs.message }}" || exit 255'
