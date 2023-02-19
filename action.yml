@@ -1,5 +1,6 @@
 # action.yml
-name: "action-sync"
+name: action-sync
+  uses: linuxdeepin/action-sync@v0.1.0
 description: "sync file to organization all repositories"
 author: myml
 branding:
